@@ -1,0 +1,5 @@
+.idea
+__pycache__
+*.gff 
+*.gff3
+*.fa
