@@ -85,9 +85,8 @@ class GenomeWorker:
         print(f"\t{len(self.__transcript_APPRIS_data)}/{len(lines) - 1} transcripts scores loaded from APPRIS!")
 
         if self.species != SPECIES.Homo_sapiens: return
-        corsair_file = APPRIS_DATA[self.species.value] + 'corsair.txt'
-        assert exists(corsair_file)
-        file = open(corsair_file, 'r')
+        assert exists(APPRIS_HOMOLOGS_DATA_PATH)
+        file = open(APPRIS_HOMOLOGS_DATA_PATH, 'r')
         lines = file.readlines()
         cnt = 0
         transcript_id = ''
@@ -95,16 +94,45 @@ class GenomeWorker:
             line = lines[index].replace('"', '')
             if line.startswith('>'):
                 transcript_id = line.replace('>', '').split('\t')[0]
+                cnt += 1
+                if not self.__transcript_APPRIS_data.__contains__(transcript_id):
+                    self.__transcript_APPRIS_data[transcript_id] = {'homologue': []}
+                elif not self.__transcript_APPRIS_data[transcript_id].__contains__('homologue'):
+                    self.__transcript_APPRIS_data[transcript_id]['homologue'] = []
                 continue
             if len(line) < 3: continue
-            # if transcript_id is filtered, then ignore record
-            if not self.__transcript_APPRIS_data.__contains__(transcript_id):
-                continue
-            if not self.__transcript_APPRIS_data[transcript_id].__contains__('homologue'):
-                self.__transcript_APPRIS_data[transcript_id]['homologue'] = []
             species = line.split('\t')[0]
             self.__transcript_APPRIS_data[transcript_id]['homologue'].append(species)
-        print(f"\t{cnt}/{len(lines)} homologue (CORSAIR) cross-species loaded from APPRIS!")
+
+        print(f"\t{cnt} transcripts homologs (CORSAIR) loaded from APPRIS!")
+
+    def get_gene_principal_transcript_id(self, gene_id):
+        transcripts = self.get_transcripts_from_gene(gene_id)
+        principal_transcript_ids = []
+        for transcript in transcripts:
+            transcript_id = transcript.id.replace("transcript:", "")
+            if self.__transcript_APPRIS_data.__contains__(transcript_id):
+                if self.__transcript_APPRIS_data[transcript_id]['APPRIS_annotation'].__contains__("PRINCIPAL"):
+                    principal_transcript_ids.append(transcript.id)
+        if len(principal_transcript_ids) == 0 or len(principal_transcript_ids) > 1:
+            return None
+        return principal_transcript_ids[0]
+
+    def get_transcript_conservation_score(self, transcript_id):
+        transcript_id = transcript_id.replace('transcript:', '')
+        if not self.__transcript_APPRIS_data.__contains__(transcript_id): return 0
+        score = float(self.__transcript_APPRIS_data[transcript_id]['conservation_score'])
+        return score
+
+    def get_transcript_homologue_species(self, transcript_id):
+        transcript_id = transcript_id.replace('transcript:', '')
+        if not self.__transcript_APPRIS_data.__contains__(transcript_id):
+            print("APPRIS not contains any info for that transcript!")
+            return []
+        if not self.__transcript_APPRIS_data[transcript_id].__contains__('homologue'):
+            print("APPRIS not contains homolog info for that transcript!")
+            return []
+        return self.__transcript_APPRIS_data[transcript_id]['homologue']
 
     def chromosomes_count(self):
         return NUMBER_OF_CHROMOSOMES[self.species.value]
@@ -144,6 +172,18 @@ class GenomeWorker:
     def get_transcripts_from_gene(self, gene_id) -> list[Feature]:
         return self.__gene_transcripts[gene_id] if self.__gene_transcripts.__contains__(gene_id) else []
 
+    def get_transcript_CDS(self, transcript_id):
+        transcript = self.feature_by_id(transcript_id)
+        frags = self.__transcript_fragments[transcript_id]
+
+        chr_index = self.chr_name2index(transcript.chrom)
+        cds = ""
+        for index in range(len(frags)):
+            frag = frags[index] if transcript.strand == '+' else frags[len(frags) - 1 - index]
+            if frag.featuretype == 'CDS':
+                cds += self.retrieve_segment_sequence(chr_index, frag.start, frag.end, frag.strand)
+        return cds
+
     def get_transcript_CDS_length(self, transcript_id):
         frags = self.__transcript_fragments[transcript_id]
         CDS_length = 0
@@ -177,6 +217,7 @@ class GenomeWorker:
         sequence_file_path = self.__get_sequence_file_path()
         for record in SeqIO.parse(sequence_file_path, 'fasta'):
             chr_index = self.chr_name2index(record.id)
+            if chr_index == -1: continue
             self.__sequences[chr_index] = record
 
         loaded_chromosomes = 0
@@ -388,7 +429,6 @@ class GenomeWorker:
         except ValueError:
             index = -1
 
-        assert 1 <= index <= NUMBER_OF_CHROMOSOMES[self.species.value]
         return index
 
     def chr_index2name(self, index):
@@ -397,6 +437,58 @@ class GenomeWorker:
         if index == NUMBER_OF_CHROMOSOMES[self.species.value] - 2: return 'X'
         assert 1 <= index <= NUMBER_OF_CHROMOSOMES[self.species.value]
         return f"{index}"
+
+    # endregion
+
+    # region overlap findings between transcript coding sequences (CDS)
+
+    def __calculate_frame_of_fragment_interval(self, fragment: Feature, interval):
+        if fragment.strand == '+':
+            return (3 + int(fragment.frame) - (interval[0] - fragment.start) % 3) % 3
+        return (3 + int(fragment.frame) - (fragment.end - interval[1]) % 3) % 3
+
+    # between each pairs of fragments from each transcript (mRNA) finds fragments overlapped by CDS
+
+    def _are_features_same_framed(self, fragment_a: Feature, fragment_b: Feature) -> bool:
+        l = fragment_a.start + int(fragment_a.frame) if fragment_a.strand == '+' else fragment_a.end - int(
+            fragment_a.frame)
+        r = fragment_b.start + int(fragment_b.frame) if fragment_b.strand == '+' else fragment_b.end - int(
+            fragment_b.frame)
+        return l % 3 == r % 3
+
+    def get_overlaps_between_transcripts(self, transcript1_id, transcript2_id):
+        non_ati_overlaps = []
+
+        fragments_a = self.get_fragments_from_transcript(transcript1_id)
+        fragments_b = self.get_fragments_from_transcript(transcript2_id)
+
+        contains_in_phase_overlaps = False
+
+        ov_length = 0
+        for fragment_a in fragments_a:
+            if fragment_a.featuretype != 'CDS': continue
+            for fragment_b in fragments_b:
+                if fragment_b.featuretype != 'CDS': continue
+                if fragment_b.end < fragment_a.start or fragment_b.start > fragment_a.end: continue
+                if fragment_b.end <= fragment_a.end:
+                    if fragment_b.start >= fragment_a.start:
+                        overlap = (fragment_b.start, fragment_b.end)
+                    else:
+                        overlap = (fragment_a.start, fragment_b.end,)
+                else:
+                    if fragment_b.start <= fragment_a.start:
+                        overlap = (fragment_a.start, fragment_a.end)
+                    else:
+                        overlap = (fragment_b.start, fragment_a.end)
+
+                if fragment_a.strand == fragment_b.strand and self._are_features_same_framed(fragment_a, fragment_b):
+                    contains_in_phase_overlaps = True
+                    continue
+
+                ov_length += overlap[1] - overlap[0] + 1
+                non_ati_overlaps.append(overlap)
+
+        return non_ati_overlaps, ov_length, contains_in_phase_overlaps
 
     # endregion
 
@@ -480,18 +572,13 @@ class GenomeWorker:
     # retrieves nucleotide composition of sequence
     # output: (C_count,G_count,A_count,T_count)
     @staticmethod
-    def sequence_composition(sequence):
+    def sequence_GC(sequence):
         sequence = sequence.upper()
-        stats = [0, 0, 0, 0]
+        gc = 0
         for char in sequence:
-            if char == 'C':
-                stats[0] += 1
-            elif char == 'G':
-                stats[1] += 1
-            elif char == 'A':
-                stats[2] += 1
-            elif char == 'T':
-                stats[3] += 1
-        return stats
+            assert 'CGAT'.__contains__(char)
+            gc += 1 if char == 'C' or char == 'G' else 0
+
+        return gc / len(sequence)
 
     # endregion
