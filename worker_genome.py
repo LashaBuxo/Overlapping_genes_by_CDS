@@ -84,27 +84,7 @@ class GenomeWorker:
             x[not_found_tag] = 1
         print(f"\t{len(self.__transcript_APPRIS_data)}/{len(lines) - 1} transcripts scores loaded from APPRIS!")
 
-        if self.species != SPECIES.Homo_sapiens: return
-        assert exists(APPRIS_HOMOLOGS_DATA_PATH)
-        file = open(APPRIS_HOMOLOGS_DATA_PATH, 'r')
-        lines = file.readlines()
-        cnt = 0
-        transcript_id = ''
-        for index in range(0, len(lines)):
-            line = lines[index].replace('"', '')
-            if line.startswith('>'):
-                transcript_id = line.replace('>', '').split('\t')[0]
-                cnt += 1
-                if not self.__transcript_APPRIS_data.__contains__(transcript_id):
-                    self.__transcript_APPRIS_data[transcript_id] = {'homologue': []}
-                elif not self.__transcript_APPRIS_data[transcript_id].__contains__('homologue'):
-                    self.__transcript_APPRIS_data[transcript_id]['homologue'] = []
-                continue
-            if len(line) < 3: continue
-            species = line.split('\t')[0]
-            self.__transcript_APPRIS_data[transcript_id]['homologue'].append(species)
 
-        print(f"\t{cnt} transcripts homologs (CORSAIR) loaded from APPRIS!")
 
     def get_gene_principal_transcript_id(self, gene_id):
         transcripts = self.get_transcripts_from_gene(gene_id)

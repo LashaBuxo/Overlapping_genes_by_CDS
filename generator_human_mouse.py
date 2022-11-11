@@ -2,11 +2,11 @@ from CDS_Overlap_Record import *
 
 human_genome = GenomeWorker(SPECIES.Homo_sapiens, ANNOTATION_LOAD.GENES_AND_TRANSCRIPTS_AND_FRAGMENTS,
                             SEQUENCE_LOAD.LOAD)
-human_records,_ = get_CDS_records_from_genome(human_genome)
+human_records,_ = get_CDS_records_from_genome(human_genome,with_clustered_graph=False)
 
 mouse_genome = GenomeWorker(SPECIES.Mus_musculus, ANNOTATION_LOAD.GENES_AND_TRANSCRIPTS_AND_FRAGMENTS,
                             SEQUENCE_LOAD.LOAD)
-mouse_records,_ = get_CDS_records_from_genome(mouse_genome)
+mouse_records,_ = get_CDS_records_from_genome(mouse_genome,with_clustered_graph=False)
 
 orth_data = {}
 
