@@ -3,4 +3,11 @@ __pycache__
 *.gff 
 *.gff3
 *.fa
+*.gct
 *.db
+*.vcf
+temp/
+Tasks/Conservation/BlastData/Results/*
+Tasks/SNPs/1000GenomesData/short_required_SNPs.txt
+Tasks/Conservation/BlastData/db/*
+CommonRequiredData/Human Expressions/*
